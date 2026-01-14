@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Просмотрщик PDF с Наложением и Настройками</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+        #sidebar {
+            position: fixed;
+            left: 0;
+            top: 0;
+            width: 250px;
+            height: 100%;
+            background: #f0f0f0;
+            padding: 20px;
+            box-shadow: 2px 0 5px rgba(0,0,0,0.1);
+            overflow-y: auto;
+            z-index: 10; /* Sidebar ниже bottomPanel */
+        }
+        #main {
+            margin-left: 250px;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            justify-content: flex-start;
+            overflow: hidden;
+            padding-bottom: 200px; /* Резерв под bottomPanel */
+        }
+        #overlayContainer {
+            position: relative;
+            width: calc(100% - 20px);
+            height: 80vh;
+            border: 1px solid #000;
+            display: none;
+            background: white;
+            overflow: hidden;
+            cursor: grab;
+            transition: transform 0.1s ease-out;
+            margin-top: 50px;
+            margin-right: 20px;
+        }
+        #overlayContainer:active {
+            cursor: grabbing;
+        }
+        #innerContainer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            transform-origin: top left;
+        }
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            cursor: move;
+            will-change: transform;
+        }
+        #canvas1, #canvas2 {
+            opacity: 1;
+            mix-blend-mode: darken;
+        }
+        #bottomPanel {
+            position: fixed;
+            bottom: 0;
+            left: 0; /* Full width, чтобы перекрывать sidebar снизу */
+            right: 0;
+            background: #f0f0f0;
+            padding: 10px;
+            box-shadow: 0 -2px 5px rgba(0,0,0,0.1);
+            display: none;
+            display: flex;
+            gap: 20px;
+            z-index: 20; /* BottomPanel поверх sidebar */
+        }
+        #navigation {
+            margin-top: 20px;
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+        }
+        #navigation button {
+            padding: 5px 10px;
+            border: none;
+            background: #ddd;
+            cursor: pointer;
+            border-radius: 4px;
+            text-align: center;
+        }
+        #navigation button:hover {
+            background: #ccc;
+        }
+        #navigation .group-label {
+            grid-column: span 2;
+            text-align: center;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        #settingsPanel {
+            text-align: left;
+            flex: 3;
+        }
+        #dragPanel {
+            flex: 1;
+            border-left: 1px solid #ccc;
+            padding-left: 20px;
+        }
+        #settingsPanel label {
+            display: block;
+            margin: 10px 0 5px;
+        }
+        #colorCode1, #colorCode2 {
+            font-weight: bold;
+        }
+        #loadingMessage1, #loadingMessage2 {
+            display: none;
+            color: red;
+            margin: 10px 0;
+        }
+        #pageSettingsContainer {
+            display: flex;
+            justify-content: space-between;
+            gap: 20px;
+        }
+        #pageSettingsContainer > div {
+            flex: 1;
+        }
+        #pageSettingsContainer h3 {
+            margin-top: 0;
+        }
+        #blendAndPagesContainer {
+            border: 1px solid #ccc;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 10px;
+        }
+        /* Стили для toggle switch */
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 60px;
+            height: 34px;
+        }
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: .4s;
+            border-radius: 34px;
+        }
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 26px;
+            width: 26px;
+            left: 4px;
+            bottom: 4px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+        input:checked + .slider {
+            background-color: #2196F3;
+        }
+        input:checked + .slider:before {
+            transform: translateX(26px);
+        }
+        #dragModeLabel {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.7.76/pdf.min.mjs"></script>
+</head>
+<body>
+    <div id="sidebar">
+        <h1>Загрузка PDF</h1>
+        <p>Первый PDF:</p>
+        <input type="file" id="pdfInput1" accept=".pdf">
+        <div id="loadingMessage1">Загрузка первого PDF...</div>
+        <p>Второй PDF:</p>
+        <input type="file" id="pdfInput2" accept=".pdf">
+        <div id="loadingMessage2">Загрузка второго PDF...</div>
+        <h2>Выбор страниц</h2>
+        <label for="page1">Страница из первого PDF:</label>
+        <input type="number" id="page1" min="1" value="1">
+        <br>
+        <label for="page2">Страница из второго PDF:</label>
+        <input type="number" id="page2" min="1" value="1">
+        <br>
+        <button id="overlayButton" disabled>Наложить страницы</button>
+        <div id="navigation" style="display: none;">
+            <div class="group-label">Первая страница</div>
+            <button id="prev1">← Предыдущая</button>
+            <button id="next1">Следующая →</button>
+            <div class="group-label">Вторая страница</div>
+            <button id="prev2">← Предыдущая</button>
+            <button id="next2">Следующая →</button>
+            <div class="group-label">Обе страницы</div>
+            <button id="prevBoth">&laquo; Предыдущие</button>
+            <button id="nextBoth">Следующие &raquo;</button>
+        </div>
+    </div>
+    <div id="main">
+        <div id="overlayContainer">
+            <div id="innerContainer">
+                <canvas id="canvas1"></canvas>
+                <canvas id="canvas2"></canvas>
+            </div>
+        </div>
+    </div>
+    <div id="bottomPanel">
+        <div id="settingsPanel">
+            <label for="preset">Преднастройка:</label>
+            <select id="preset">
+                <option value="default">По умолчанию</option>
+                <option value="difference">Поиск различий</option>
+                <option value="custom">Пользовательский</option>
+            </select>
+            <div id="blendAndPagesContainer">
+                <label for="blendMode">Режим наложения:</label>
+                <select id="blendMode">
+                    <option value="normal">Normal (стандартный)</option>
+                    <option value="multiply">Multiply (умножение, как в Photoshop)</option>
+                    <option value="screen">Screen (экран)</option>
+                    <option value="overlay">Overlay (наложение)</option>
+                    <option value="darken" selected>Darken (затемнение)</option>
+                    <option value="lighten">Lighten (осветление)</option>
+                    <option value="color-dodge">Color Dodge (осветление цвета)</option>
+                    <option value="color-burn">Color Burn (затемнение цвета)</option>
+                    <option value="hard-light">Hard Light (жёсткий свет)</option>
+                    <option value="soft-light">Soft Light (мягкий свет)</option>
+                    <option value="difference">Difference (разница)</option>
+                    <option value="exclusion">Exclusion (исключение)</option>
+                </select>
+                <div id="pageSettingsContainer">
+                    <div>
+                        <h3>Настройки первой страницы</h3>
+                        <label for="color1">Цвет наложения:</label>
+                        <input type="color" id="color1" value="#0000ff">
+                        <span id="colorCode1">#0000ff</span>
+                        <label for="opacity1">Прозрачность (0-1):</label>
+                        <input type="range" id="opacity1" min="0" max="1" step="0.1" value="1">
+                        <span id="opacityValue1">1</span>
+                    </div>
+                    <div>
+                        <h3>Настройки второй страницы</h3>
+                        <label for="color2">Цвет наложения:</label>
+                        <input type="color" id="color2" value="#ff0000">
+                        <span id="colorCode2">#ff0000</span>
+                        <label for="opacity2">Прозрачность (0-1):</label>
+                        <input type="range" id="opacity2" min="0" max="1" step="0.1" value="1">
+                        <span id="opacityValue2">1</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div id="dragPanel">
+            <h3>Режим смещения</h3>
+            <div id="dragModeLabel">
+                <label for="dragMode">Включить режим драга:</label>
+                <label class="switch">
+                    <input type="checkbox" id="dragMode">
+                    <span class="slider"></span>
+                </label>
+            </div>
+            <button id="resetPosition">Сбросить позицию</button>
+        </div>
+    </div>
+    <script type="module">
+        import * as pdfjsLib from 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.7.76/pdf.min.mjs';
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.7.76/pdf.worker.min.mjs';
+        const pdfInput1 = document.getElementById('pdfInput1');
+        const loadingMessage1 = document.getElementById('loadingMessage1');
+        const pdfInput2 = document.getElementById('pdfInput2');
+        const loadingMessage2 = document.getElementById('loadingMessage2');
+        const overlayButton = document.getElementById('overlayButton');
+        const overlayContainer = document.getElementById('overlayContainer');
+        const innerContainer = document.getElementById('innerContainer');
+        const bottomPanel = document.getElementById('bottomPanel');
+        const navigation = document.getElementById('navigation');
+        const canvas1 = document.getElementById('canvas1');
+        const canvas2 = document.getElementById('canvas2');
+        const ctx1 = canvas1.getContext('2d');
+        const ctx2 = canvas2.getContext('2d');
+        const page1Input = document.getElementById('page1');
+        const page2Input = document.getElementById('page2');
+        const prevBoth = document.getElementById('prevBoth');
+        const prev1 = document.getElementById('prev1');
+        const prev2 = document.getElementById('prev2');
+        const nextBoth = document.getElementById('nextBoth');
+        const next1 = document.getElementById('next1');
+        const next2 = document.getElementById('next2');
+        const presetSelect = document.getElementById('preset');
+        const blendModeSelect = document.getElementById('blendMode');
+        const color1Input = document.getElementById('color1');
+        const colorCode1 = document.getElementById('colorCode1');
+        const opacity1Slider = document.getElementById('opacity1');
+        const opacityValue1 = document.getElementById('opacityValue1');
+        const color2Input = document.getElementById('color2');
+        const colorCode2 = document.getElementById('colorCode2');
+        const opacity2Slider = document.getElementById('opacity2');
+        const opacityValue2 = document.getElementById('opacityValue2');
+        const dragModeCheckbox = document.getElementById('dragMode');
+        const resetPositionButton = document.getElementById('resetPosition');
+        let pdfDoc1 = null;
+        let pdfDoc2 = null;
+        let fileURL1 = null;
+        let fileURL2 = null;
+        let isDragging = false;
+        let startX, startY, initialLeft, initialTop;
+        let currentColor1 = color1Input.value;
+        let currentColor2 = color2Input.value;
+        let isDraggingView = false;
+        let viewStartX, viewStartY, viewInitialLeft, viewInitialTop;
+        let scale = 1;
+        let panX = 0;
+        let panY = 0;
+        let offscreenCanvas1 = document.createElement('canvas');
+        let offscreenCtx1 = offscreenCanvas1.getContext('2d');
+        let offscreenCanvas2 = document.createElement('canvas');
+        let offscreenCtx2 = offscreenCanvas2.getContext('2d');
+        let currentPage1 = 1;
+        let currentPage2 = 1;
+        let customSettings = {};
+        const presets = {
+            'default': { blend: 'darken', color1: '#0000ff', color2: '#ff0000', op1: 1, op2: 1 },
+            'difference': { blend: 'difference', color1: '#ff0000', color2: '#ff0000', op1: 1, op2: 1 },
+            'custom': {} // Будет заполняться динамически
+        };
+        // Функция применения пресета
+        function applyPreset(presetName) {
+            const preset = presets[presetName];
+            if (!preset) return;
+            blendModeSelect.value = preset.blend;
+            color1Input.value = preset.color1;
+            colorCode1.textContent = preset.color1;
+            currentColor1 = preset.color1;
+            opacity1Slider.value = preset.op1;
+            opacityValue1.textContent = preset.op1;
+            color2Input.value = preset.color2;
+            colorCode2.textContent = preset.color2;
+            currentColor2 = preset.color2;
+            opacity2Slider.value = preset.op2;
+            opacityValue2.textContent = preset.op2;
+            updateBlendMode();
+            updateOpacity1();
+            updateOpacity2();
+            if (overlayContainer.style.display === 'block') {
+                applyColor1();
+                applyColor2();
+            }
+        }
+        // Сохранение текущих настроек в custom
+        function saveCurrentToCustom() {
+            customSettings = {
+                blend: blendModeSelect.value,
+                color1: color1Input.value,
+                color2: color2Input.value,
+                op1: parseFloat(opacity1Slider.value),
+                op2: parseFloat(opacity2Slider.value)
+            };
+            presets['custom'] = customSettings;
+        }
+        // Listener для пресета
+        presetSelect.addEventListener('change', function() {
+            const selected = presetSelect.value;
+            if (selected === 'custom') {
+                applyPreset('custom');
+            } else {
+                applyPreset(selected);
+            }
+        });
+        // Listeners для изменений настроек
+        function handleUserChange() {
+            if (presetSelect.value === 'custom') {
+                saveCurrentToCustom();
+            } else {
+                saveCurrentToCustom();
+                presetSelect.value = 'custom';
+            }
+        }
+        blendModeSelect.addEventListener('change', function() {
+            updateBlendMode();
+            handleUserChange();
+        });
+        color1Input.addEventListener('input', function() {
+            currentColor1 = color1Input.value;
+            colorCode1.textContent = currentColor1;
+            if (overlayContainer.style.display === 'block') {
+                applyColor1();
+            }
+            handleUserChange();
+        });
+        opacity1Slider.addEventListener('input', function() {
+            updateOpacity1();
+            handleUserChange();
+        });
+        color2Input.addEventListener('input', function() {
+            currentColor2 = color2Input.value;
+            colorCode2.textContent = currentColor2;
+            if (overlayContainer.style.display === 'block') {
+                applyColor2();
+            }
+            handleUserChange();
+        });
+        opacity2Slider.addEventListener('input', function() {
+            updateOpacity2();
+            handleUserChange();
+        });
+        function updateOpacity1() {
+            opacityValue1.textContent = opacity1Slider.value;
+            canvas1.style.opacity = opacity1Slider.value;
+        }
+        function updateOpacity2() {
+            opacityValue2.textContent = opacity2Slider.value;
+            canvas2.style.opacity = opacity2Slider.value;
+        }
+        function updateBlendMode() {
+            canvas2.style.mixBlendMode = blendModeSelect.value;
+        }
+        // Функция для преобразования в grayscale
+        function toGrayscale(ctx, width, height) {
+            const imageData = ctx.getImageData(0, 0, width, height);
+            const data = imageData.data;
+            for (let i = 0; i < data.length; i += 4) {
+                const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
+                data[i] = avg; // red
+                data[i + 1] = avg; // green
+                data[i + 2] = avg; // blue
+            }
+            ctx.putImageData(imageData, 0, 0);
+        }
+        // Рендеринг страницы 1 в offscreen
+        async function renderPage1(pageNum) {
+            currentPage1 = pageNum;
+            if (!pdfDoc1) return;
+            const page = await pdfDoc1.getPage(pageNum);
+            const baseScale = 1.5;
+            const viewport = page.getViewport({ scale: baseScale });
+            offscreenCanvas1.height = viewport.height;
+            offscreenCanvas1.width = viewport.width;
+            const renderContext = { canvasContext: offscreenCtx1, viewport: viewport };
+            await page.render(renderContext).promise;
+            applyColor1(); // Применяем цвет и копируем в основной canvas
+        }
+        // Применение цвета для страницы 1 без перерендера PDF
+        function applyColor1() {
+            ctx1.clearRect(0, 0, canvas1.width, canvas1.height);
+            canvas1.width = offscreenCanvas1.width;
+            canvas1.height = offscreenCanvas1.height;
+            ctx1.drawImage(offscreenCanvas1, 0, 0);
+            // Преобразование в grayscale перед наложением цвета
+            toGrayscale(ctx1, canvas1.width, canvas1.height);
+            ctx1.globalCompositeOperation = 'screen';
+            ctx1.fillStyle = currentColor1;
+            ctx1.fillRect(0, 0, canvas1.width, canvas1.height);
+            ctx1.globalCompositeOperation = 'source-over';
+            updateOpacity1();
+            updateInnerSize();
+            applyTransform();
+        }
+        // Рендеринг страницы 2 в offscreen
+        async function renderPage2(pageNum) {
+            currentPage2 = pageNum;
+            if (!pdfDoc2) return;
+            const page = await pdfDoc2.getPage(pageNum);
+            const baseScale = 1.5;
+            const viewport = page.getViewport({ scale: baseScale });
+            offscreenCanvas2.height = viewport.height;
+            offscreenCanvas2.width = viewport.width;
+            const renderContext = { canvasContext: offscreenCtx2, viewport: viewport };
+            await page.render(renderContext).promise;
+            applyColor2(); // Применяем цвет и копируем в основной canvas
+        }
+        // Применение цвета для страницы 2 без перерендера PDF
+        function applyColor2() {
+            ctx2.clearRect(0, 0, canvas2.width, canvas2.height);
+            canvas2.width = offscreenCanvas2.width;
+            canvas2.height = offscreenCanvas2.height;
+            ctx2.drawImage(offscreenCanvas2, 0, 0);
+            // Преобразование в grayscale перед наложением цвета
+            toGrayscale(ctx2, canvas2.width, canvas2.height);
+            ctx2.globalCompositeOperation = 'screen';
+            ctx2.fillStyle = currentColor2;
+            ctx2.fillRect(0, 0, canvas2.width, canvas2.height);
+            ctx2.globalCompositeOperation = 'source-over';
+            updateOpacity2();
+            updateBlendMode();
+            updateInnerSize();
+            applyTransform();
+        }
+        // Обновление размера innerContainer
+        function updateInnerSize() {
+            innerContainer.style.width = `${Math.max(offscreenCanvas1.width, offscreenCanvas2.width)}px`;
+            innerContainer.style.height = `${Math.max(offscreenCanvas1.height, offscreenCanvas2.height)}px`;
+        }
+        // Применение трансформации (зум и пан)
+        function applyTransform() {
+            innerContainer.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+        }
+        // Драг страницы 2
+        canvas2.addEventListener('mousedown', function(e) {
+            if (dragModeCheckbox.checked) {
+                isDragging = true;
+                startX = e.clientX;
+                startY = e.clientY;
+                initialLeft = parseInt(canvas2.style.left || '0');
+                initialTop = parseInt(canvas2.style.top || '0');
+                e.stopPropagation(); // Чтобы не запускался драг просмотра
+            }
+        });
+        document.addEventListener('mousemove', function(e) {
+            if (isDragging && dragModeCheckbox.checked) {
+                const dx = (e.clientX - startX) / scale;
+                const dy = (e.clientY - startY) / scale;
+                canvas2.style.left = `${initialLeft + dx}px`;
+                canvas2.style.top = `${initialTop + dy}px`;
+            }
+        });
+        document.addEventListener('mouseup', function() {
+            isDragging = false;
+        });
+        resetPositionButton.addEventListener('click', function() {
+            canvas2.style.left = '0px';
+            canvas2.style.top = '0px';
+        });
+        // Драг просмотра (панорамирование)
+        overlayContainer.addEventListener('mousedown', function(e) {
+            if (!dragModeCheckbox.checked) { // Только если не включен драг страницы
+                isDraggingView = true;
+                viewStartX = e.clientX;
+                viewStartY = e.clientY;
+                viewInitialLeft = panX;
+                viewInitialTop = panY;
+            }
+        });
+        document.addEventListener('mousemove', function(e) {
+            if (isDraggingView) {
+                const dx = e.clientX - viewStartX;
+                const dy = e.clientY - viewStartY;
+                panX = viewInitialLeft + dx;
+                panY = viewInitialTop + dy;
+                applyTransform();
+            }
+        });
+        document.addEventListener('mouseup', function() {
+            isDraggingView = false;
+        });
+        // Зум колесом мыши
+        overlayContainer.addEventListener('wheel', function(e) {
+            e.preventDefault();
+            const zoomFactor = 0.1;
+            const oldScale = scale;
+            scale += e.deltaY < 0 ? zoomFactor : -zoomFactor;
+            scale = Math.max(0.1, Math.min(scale, 3)); // Ограничение зума от 0.1x до 3x
+            // Корректировка пан для зума относительно курсора
+            const rect = overlayContainer.getBoundingClientRect();
+            const mouseX = (e.clientX - rect.left - panX) / oldScale;
+            const mouseY = (e.clientY - rect.top - panY) / oldScale;
+            panX -= mouseX * (scale - oldScale);
+            panY -= mouseY * (scale - oldScale);
+            applyTransform();
+        });
+        // Загрузка PDF1
+        pdfInput1.addEventListener('change', function(event) {
+            const file = event.target.files[0];
+            if (file && file.type === 'application/pdf') {
+                fileURL1 = URL.createObjectURL(file);
+                loadingMessage1.style.display = 'block';
+                pdfjsLib.getDocument(fileURL1).promise.then(function(pdf) {
+                    pdfDoc1 = pdf;
+                    console.log('Первый PDF загружен');
+                    loadingMessage1.style.display = 'none';
+                    checkBothLoaded();
+                }).catch(function(error) {
+                    console.error('Ошибка:', error);
+                    loadingMessage1.textContent = 'Ошибка. Попробуйте другой файл.';
+                    loadingMessage1.style.display = 'block';
+                });
+            } else {
+                alert('Выберите PDF.');
+            }
+        });
+        // Загрузка PDF2
+        pdfInput2.addEventListener('change', function(event) {
+            const file = event.target.files[0];
+            if (file && file.type === 'application/pdf') {
+                fileURL2 = URL.createObjectURL(file);
+                loadingMessage2.style.display = 'block';
+                pdfjsLib.getDocument(fileURL2).promise.then(function(pdf) {
+                    pdfDoc2 = pdf;
+                    console.log('Второй PDF загружен');
+                    loadingMessage2.style.display = 'none';
+                    checkBothLoaded();
+                }).catch(function(error) {
+                    console.error('Ошибка:', error);
+                    loadingMessage2.textContent = 'Ошибка. Попробуйте другой файл.';
+                    loadingMessage2.style.display = 'block';
+                });
+            } else {
+                alert('Выберите PDF.');
+            }
+        });
+        function checkBothLoaded() {
+            if (pdfDoc1 && pdfDoc2) {
+                overlayButton.disabled = false;
+            }
+        }
+        // Наложение
+        overlayButton.addEventListener('click', async function() {
+            if (!pdfDoc1 || !pdfDoc2) {
+                alert('Загрузите оба PDF.');
+                return;
+            }
+            currentPage1 = parseInt(page1Input.value);
+            currentPage2 = parseInt(page2Input.value);
+            if (isNaN(currentPage1) || currentPage1 < 1 || currentPage1 > pdfDoc1.numPages ||
+                isNaN(currentPage2) || currentPage2 < 1 || currentPage2 > pdfDoc2.numPages) {
+                alert('Неверные номера страниц.');
+                return;
+            }
+            overlayContainer.style.display = 'block';
+            bottomPanel.style.display = 'flex';
+            navigation.style.display = 'grid';
+            presetSelect.value = 'default';
+            applyPreset('default');
+            await renderPage1(currentPage1);
+            await renderPage2(currentPage2);
+        });
+        // Навигация
+        prevBoth.addEventListener('click', () => navigate(-1, -1));
+        prev1.addEventListener('click', () => navigate(-1, 0));
+        prev2.addEventListener('click', () => navigate(0, -1));
+        nextBoth.addEventListener('click', () => navigate(1, 1));
+        next1.addEventListener('click', () => navigate(1, 0));
+        next2.addEventListener('click', () => navigate(0, 1));
+        async function navigate(delta1, delta2) {
+            currentPage1 = parseInt(page1Input.value) + delta1;
+            currentPage2 = parseInt(page2Input.value) + delta2;
+            currentPage1 = Math.max(1, Math.min(currentPage1, pdfDoc1.numPages));
+            currentPage2 = Math.max(1, Math.min(currentPage2, pdfDoc2.numPages));
+            page1Input.value = currentPage1;
+            page2Input.value = currentPage2;
+            await renderPage1(currentPage1);
+            await renderPage2(currentPage2);
+        }
+        // Инициализация
+        updateOpacity1();
+        updateOpacity2();
+        updateBlendMode();
+    </script>
+</body>
+</html>
