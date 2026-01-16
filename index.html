@@ -71,7 +71,7 @@
         #bottomPanel {
             position: fixed;
             bottom: 0;
-            left: 0; /* Full width, чтобы перекрывать sidebar снизу */
+            left: 290px; /* Full width, чтобы перекрывать sidebar снизу */
             right: 0;
             background: #f0f0f0;
             padding: 10px;
@@ -187,9 +187,12 @@
             align-items: center;
             gap: 10px;
         }
+        #scaleSection {
+            margin-top: 20px; /* Визуальное отделение от предыдущих элементов */
+        }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.7.76/pdf.min.mjs"></script>
-    
+	
 		<!-- Yandex.Metrika counter -->
 	<script type="text/javascript">
 		(function(m,e,t,r,i,k,a){
@@ -203,7 +206,7 @@
 	</script>
 	<noscript><div><img src="https://mc.yandex.ru/watch/106270393" style="position:absolute; left:-9999px;" alt="" /></div></noscript>
 	<!-- /Yandex.Metrika counter -->
-    
+	
 </head>
 <body>
     <div id="sidebar">
@@ -298,6 +301,12 @@
                 </label>
             </div>
             <button id="resetPosition">Сбросить позицию</button>
+            <div id="scaleSection">
+                <label for="scale2">Масштаб второй страницы:</label>
+                <input type="text" id="scale2" value="1">
+                <input type="range" id="scale2Slider" min="0.1" max="2" step="0.01" value="1">
+                <button id="resetScale">Сбросить масштаб</button>
+            </div>
         </div>
     </div>
     <script type="module">
@@ -336,6 +345,9 @@
         const opacityValue2 = document.getElementById('opacityValue2');
         const dragModeCheckbox = document.getElementById('dragMode');
         const resetPositionButton = document.getElementById('resetPosition');
+        const scale2Input = document.getElementById('scale2');
+        const scale2Slider = document.getElementById('scale2Slider');
+        const resetScaleButton = document.getElementById('resetScale');
         let pdfDoc1 = null;
         let pdfDoc2 = null;
         let fileURL1 = null;
@@ -356,6 +368,7 @@
         let currentPage1 = 1;
         let currentPage2 = 1;
         let customSettings = {};
+        let scale2 = 1; // Новый масштаб для второй страницы
         const presets = {
             'default': { blend: 'darken', color1: '#0000ff', color2: '#ff0000', op1: 1, op2: 1 },
             'difference': { blend: 'difference', color1: '#ff0000', color2: '#ff0000', op1: 1, op2: 1 },
@@ -522,15 +535,26 @@
             updateBlendMode();
             updateInnerSize();
             applyTransform();
+            updateScale2(); // Обновляем масштаб после применения цвета
         }
         // Обновление размера innerContainer
         function updateInnerSize() {
-            innerContainer.style.width = `${Math.max(offscreenCanvas1.width, offscreenCanvas2.width)}px`;
-            innerContainer.style.height = `${Math.max(offscreenCanvas1.height, offscreenCanvas2.height)}px`;
+            // Учитываем масштаб второй страницы для innerContainer
+            const scaledWidth2 = offscreenCanvas2.width * scale2;
+            const scaledHeight2 = offscreenCanvas2.height * scale2;
+            innerContainer.style.width = `${Math.max(offscreenCanvas1.width, scaledWidth2)}px`;
+            innerContainer.style.height = `${Math.max(offscreenCanvas1.height, scaledHeight2)}px`;
         }
         // Применение трансформации (зум и пан)
         function applyTransform() {
             innerContainer.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+        }
+        // Обновление масштаба второй страницы
+        function updateScale2() {
+            canvas2.style.transform = `scale(${scale2})`;
+            canvas2.style.transformOrigin = 'top left'; // Зум относительно верхнего левого угла
+            updateInnerSize();
+            applyTransform();
         }
         // Драг страницы 2
         canvas2.addEventListener('mousedown', function(e) {
@@ -538,15 +562,15 @@
                 isDragging = true;
                 startX = e.clientX;
                 startY = e.clientY;
-                initialLeft = parseInt(canvas2.style.left || '0');
-                initialTop = parseInt(canvas2.style.top || '0');
+                initialLeft = parseFloat(canvas2.style.left || '0');
+                initialTop = parseFloat(canvas2.style.top || '0');
                 e.stopPropagation(); // Чтобы не запускался драг просмотра
             }
         });
         document.addEventListener('mousemove', function(e) {
             if (isDragging && dragModeCheckbox.checked) {
-                const dx = (e.clientX - startX) / scale;
-                const dy = (e.clientY - startY) / scale;
+                const dx = (e.clientX - startX) / (scale * scale2); // Учитываем оба масштаба
+                const dy = (e.clientY - startY) / (scale * scale2);
                 canvas2.style.left = `${initialLeft + dx}px`;
                 canvas2.style.top = `${initialTop + dy}px`;
             }
@@ -557,6 +581,31 @@
         resetPositionButton.addEventListener('click', function() {
             canvas2.style.left = '0px';
             canvas2.style.top = '0px';
+        });
+        // Обработчик для ввода масштаба
+        scale2Input.addEventListener('change', function() {
+            const newScale2 = parseFloat(scale2Input.value);
+            if (isNaN(newScale2) || newScale2 <= 0) {
+                alert('Введите положительное число для масштаба.');
+                scale2Input.value = scale2;
+                return;
+            }
+            scale2 = newScale2;
+            scale2Slider.value = scale2; // Синхронизация с ползунком
+            updateScale2();
+        });
+        // Обработчик для ползунка масштаба
+        scale2Slider.addEventListener('input', function() {
+            scale2 = parseFloat(scale2Slider.value);
+            scale2Input.value = scale2.toFixed(2); // Синхронизация с текстовым полем, с 2 знаками после запятой
+            updateScale2();
+        });
+        // Кнопка сброса масштаба
+        resetScaleButton.addEventListener('click', function() {
+            scale2 = 1;
+            scale2Input.value = '1';
+            scale2Slider.value = '1';
+            updateScale2();
         });
         // Драг просмотра (панорамирование)
         overlayContainer.addEventListener('mousedown', function(e) {
@@ -660,6 +709,10 @@
             applyPreset('default');
             await renderPage1(currentPage1);
             await renderPage2(currentPage2);
+            scale2 = 1; // Сброс масштаба при новом наложении
+            scale2Input.value = '1';
+            scale2Slider.value = '1';
+            updateScale2();
         });
         // Навигация
         prevBoth.addEventListener('click', () => navigate(-1, -1));
@@ -684,5 +737,4 @@
         updateBlendMode();
     </script>
 </body>
-
 </html>
