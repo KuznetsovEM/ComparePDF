@@ -369,6 +369,8 @@
         let currentPage2 = 1;
         let customSettings = {};
         let scale2 = 1; // Новый масштаб для второй страницы
+        let initialPinchDistance = null;
+        let initialScale = 1;
         const presets = {
             'default': { blend: 'darken', color1: '#0000ff', color2: '#ff0000', op1: 1, op2: 1 },
             'difference': { blend: 'difference', color1: '#ff0000', color2: '#ff0000', op1: 1, op2: 1 },
@@ -556,28 +558,45 @@
             updateInnerSize();
             applyTransform();
         }
+        // Функции для обработки событий (mouse и touch)
+        function getEventPosition(e) {
+            if (e.touches && e.touches.length > 0) {
+                return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+            }
+            return { x: e.clientX, y: e.clientY };
+        }
         // Драг страницы 2
-        canvas2.addEventListener('mousedown', function(e) {
+        function startDrag(e) {
             if (dragModeCheckbox.checked) {
                 isDragging = true;
-                startX = e.clientX;
-                startY = e.clientY;
+                const pos = getEventPosition(e);
+                startX = pos.x;
+                startY = pos.y;
                 initialLeft = parseFloat(canvas2.style.left || '0');
                 initialTop = parseFloat(canvas2.style.top || '0');
-                e.stopPropagation(); // Чтобы не запускался драг просмотра
+                e.preventDefault();
+                e.stopPropagation();
             }
-        });
-        document.addEventListener('mousemove', function(e) {
+        }
+        function moveDrag(e) {
             if (isDragging && dragModeCheckbox.checked) {
-                const dx = (e.clientX - startX) / (scale * scale2); // Учитываем оба масштаба
-                const dy = (e.clientY - startY) / (scale * scale2);
+                const pos = getEventPosition(e);
+                const dx = (pos.x - startX) / (scale * scale2);
+                const dy = (pos.y - startY) / (scale * scale2);
                 canvas2.style.left = `${initialLeft + dx}px`;
                 canvas2.style.top = `${initialTop + dy}px`;
+                e.preventDefault();
             }
-        });
-        document.addEventListener('mouseup', function() {
+        }
+        function endDrag() {
             isDragging = false;
-        });
+        }
+        canvas2.addEventListener('mousedown', startDrag);
+        canvas2.addEventListener('touchstart', startDrag, { passive: false });
+        document.addEventListener('mousemove', moveDrag);
+        document.addEventListener('touchmove', moveDrag, { passive: false });
+        document.addEventListener('mouseup', endDrag);
+        document.addEventListener('touchend', endDrag);
         resetPositionButton.addEventListener('click', function() {
             canvas2.style.left = '0px';
             canvas2.style.top = '0px';
@@ -591,13 +610,13 @@
                 return;
             }
             scale2 = newScale2;
-            scale2Slider.value = scale2; // Синхронизация с ползунком
+            scale2Slider.value = scale2;
             updateScale2();
         });
         // Обработчик для ползунка масштаба
         scale2Slider.addEventListener('input', function() {
             scale2 = parseFloat(scale2Slider.value);
-            scale2Input.value = scale2.toFixed(2); // Синхронизация с текстовым полем, с 2 знаками после запятой
+            scale2Input.value = scale2.toFixed(2);
             updateScale2();
         });
         // Кнопка сброса масштаба
@@ -608,35 +627,44 @@
             updateScale2();
         });
         // Драг просмотра (панорамирование)
-        overlayContainer.addEventListener('mousedown', function(e) {
-            if (!dragModeCheckbox.checked) { // Только если не включен драг страницы
+        function startViewDrag(e) {
+            if (!dragModeCheckbox.checked) {
                 isDraggingView = true;
-                viewStartX = e.clientX;
-                viewStartY = e.clientY;
+                const pos = getEventPosition(e);
+                viewStartX = pos.x;
+                viewStartY = pos.y;
                 viewInitialLeft = panX;
                 viewInitialTop = panY;
+                e.preventDefault();
             }
-        });
-        document.addEventListener('mousemove', function(e) {
+        }
+        function moveViewDrag(e) {
             if (isDraggingView) {
-                const dx = e.clientX - viewStartX;
-                const dy = e.clientY - viewStartY;
+                const pos = getEventPosition(e);
+                const dx = pos.x - viewStartX;
+                const dy = pos.y - viewStartY;
                 panX = viewInitialLeft + dx;
                 panY = viewInitialTop + dy;
                 applyTransform();
+                e.preventDefault();
             }
-        });
-        document.addEventListener('mouseup', function() {
+        }
+        function endViewDrag() {
             isDraggingView = false;
-        });
-        // Зум колесом мыши
+        }
+        overlayContainer.addEventListener('mousedown', startViewDrag);
+        overlayContainer.addEventListener('touchstart', startViewDrag, { passive: false });
+        document.addEventListener('mousemove', moveViewDrag);
+        document.addEventListener('touchmove', moveViewDrag, { passive: false });
+        document.addEventListener('mouseup', endViewDrag);
+        document.addEventListener('touchend', endViewDrag);
+        // Зум колесом мыши или pinch
         overlayContainer.addEventListener('wheel', function(e) {
             e.preventDefault();
             const zoomFactor = 0.1;
             const oldScale = scale;
             scale += e.deltaY < 0 ? zoomFactor : -zoomFactor;
-            scale = Math.max(0.1, Math.min(scale, 3)); // Ограничение зума от 0.1x до 3x
-            // Корректировка пан для зума относительно курсора
+            scale = Math.max(0.1, Math.min(scale, 3));
             const rect = overlayContainer.getBoundingClientRect();
             const mouseX = (e.clientX - rect.left - panX) / oldScale;
             const mouseY = (e.clientY - rect.top - panY) / oldScale;
@@ -644,6 +672,37 @@
             panY -= mouseY * (scale - oldScale);
             applyTransform();
         });
+        // Pinch zoom для touch
+        overlayContainer.addEventListener('touchstart', function(e) {
+            if (e.touches.length === 2) {
+                e.preventDefault();
+                initialPinchDistance = getPinchDistance(e);
+                initialScale = scale;
+            }
+        }, { passive: false });
+        overlayContainer.addEventListener('touchmove', function(e) {
+            if (e.touches.length === 2) {
+                e.preventDefault();
+                const currentDistance = getPinchDistance(e);
+                const zoomFactor = currentDistance / initialPinchDistance;
+                const oldScale = scale;
+                scale = Math.max(0.1, Math.min(initialScale * zoomFactor, 3));
+                // Корректировка pan относительно центра pinch
+                const rect = overlayContainer.getBoundingClientRect();
+                const pinchCenterX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left;
+                const pinchCenterY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top;
+                const mouseX = (pinchCenterX - panX) / oldScale;
+                const mouseY = (pinchCenterY - panY) / oldScale;
+                panX -= mouseX * (scale - oldScale);
+                panY -= mouseY * (scale - oldScale);
+                applyTransform();
+            }
+        }, { passive: false });
+        function getPinchDistance(e) {
+            const dx = e.touches[0].clientX - e.touches[1].clientX;
+            const dy = e.touches[0].clientY - e.touches[1].clientY;
+            return Math.sqrt(dx * dx + dy * dy);
+        }
         // Загрузка PDF1
         pdfInput1.addEventListener('change', function(event) {
             const file = event.target.files[0];
